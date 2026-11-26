@@ -116,7 +116,66 @@ def main() -> int:
         {"instrument_id": chosen, "reading": reading},
     )
     show(f"凭现行方案号提交精测（{chosen}, 档值 {reading}）", status_ok, result)
-    return 0 if status_ok == 200 else 1
+
+    # ------------------------------------------------------------------
+    # 核验流程：凭现行方案号与备选树开单，回抄样片结果识别实际判定树
+    # ------------------------------------------------------------------
+    status_v, verify_plan = call("POST", "/plans", PLAN)
+    v_plan_code = verify_plan["plan_code"]
+    status_open, order = call(
+        "POST",
+        f"/plans/{v_plan_code}/verifications",
+        {
+            "candidates": [
+                {
+                    "id": "B",
+                    "tree": {
+                        "layer": "outer",
+                        "threshold": 52,
+                        "le": {"verdict": "pass"},
+                        "gt": {"verdict": "rework"},
+                    },
+                },
+                {
+                    "id": "C",
+                    "tree": {
+                        "layer": "inner",
+                        "threshold": 5,
+                        "le": {"verdict": "pass"},
+                        "gt": {"verdict": "rework"},
+                    },
+                },
+            ]
+        },
+    )
+    show("开核验单（方案树 + 2 棵备选树）", status_open, order)
+    if status_open != 201:
+        return 1
+    vrf_code = order["verification_code"]
+    print(f"\n核验单号 {vrf_code}，样片 {order['sample_count']} 片：")
+    for sample in order["samples"]:
+        print(
+            f"  #{sample['sample_index']} 外{sample['outer']}/内{sample['inner']}"
+            f" 预期={sample['expected_verdicts']}"
+        )
+    print("任意两树区分片数:", order["pair_difference_counts"])
+
+    # 模拟设备实际装的是编号 B 的树，回抄时故意抄错第一片。
+    results = [
+        {
+            "sample_index": sample["sample_index"],
+            "verdict": sample["expected_verdicts"]["B"],
+        }
+        for sample in order["samples"]
+    ]
+    results[0]["verdict"] = (
+        "rework" if results[0]["verdict"] == "pass" else "pass"
+    )
+    status_rec, recognized = call(
+        "POST", f"/verifications/{vrf_code}/results", {"results": results}
+    )
+    show("回抄样片结果（第一片故意抄错）", status_rec, recognized)
+    return 0 if status_ok == 200 and status_rec == 200 else 1
 
 
 if __name__ == "__main__":

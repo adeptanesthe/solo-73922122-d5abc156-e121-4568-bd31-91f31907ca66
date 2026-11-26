@@ -14,8 +14,10 @@ from .schemas import (
     PlanRequest,
     PrecisionRequest,
     RangeModel,
+    VerificationOrderRequest,
+    VerificationSubmitRequest,
 )
-from .service import PlanService, ServiceError, coarse_from_payload
+from .service import PLAN_TREE_KEY, PlanService, ServiceError, coarse_from_payload
 
 app = FastAPI(
     title="双层复合膜厚度判定 API",
@@ -207,3 +209,59 @@ def instrument_readings(plan_code: str, instrument_id: str) -> dict[str, Any]:
         "reading_intervals": report.get("reading_intervals"),
         "conflict": report.get("conflict"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 核验单：开单、查询、回抄识别
+# ---------------------------------------------------------------------------
+
+
+def _verification_response(order) -> dict[str, Any]:
+    return {
+        "verification_code": order.code,
+        "plan_code": order.plan_code,
+        "status": order.status,
+        "plan_tree_key": PLAN_TREE_KEY,
+        "candidate_ids": list(order.candidate_ids),
+        "sample_count": len(order.plan.samples),
+        "samples": order.sample_payload(),
+        "pair_difference_counts": {
+            f"{a}|{b}": count
+            for (a, b), count in order.plan.pair_difference_counts.items()
+        },
+        "recognition": order.recognition,
+    }
+
+
+@app.post(
+    "/plans/{plan_code}/verifications",
+    status_code=201,
+    summary="凭现行方案号与 1~3 棵备选树开核验单，返回最少样片厚度",
+)
+def create_verification(plan_code: str, payload: VerificationOrderRequest) -> dict[str, Any]:
+    order = service.create_verification(
+        plan_code,
+        [item.model_dump() for item in payload.candidates],
+    )
+    return _verification_response(order)
+
+
+@app.get(
+    "/verifications/{verification_code}",
+    summary="查询核验单（样片厚度、预期判定与回抄状态）",
+)
+def get_verification(verification_code: str) -> dict[str, Any]:
+    return _verification_response(service.get_verification(verification_code))
+
+
+@app.post(
+    "/verifications/{verification_code}/results",
+    summary="凭核验单号回抄每片样片结果，识别设备实际安装的判定树",
+)
+def submit_verification(
+    verification_code: str, payload: VerificationSubmitRequest
+) -> dict[str, Any]:
+    return service.submit_verification(
+        verification_code,
+        [item.model_dump() for item in payload.results],
+    )

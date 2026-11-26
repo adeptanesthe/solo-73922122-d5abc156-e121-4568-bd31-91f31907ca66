@@ -78,3 +78,56 @@ class PrecisionRequest(StrictModel):
         if value < 0:
             raise ValueError("实测档值必须是非负整数")
         return value
+
+
+class CandidateTreeModel(StrictModel):
+    """核验开单中的一棵备选判定树。"""
+
+    id: InstrumentId
+    tree: dict[str, Any]
+
+    @field_validator("id")
+    @classmethod
+    def _non_empty_id(cls, value: Union[int, str]) -> Union[int, str]:
+        if isinstance(value, str) and value.strip() == "":
+            raise ValueError("备选树编号不能为空字符串")
+        if str(value) == "plan":
+            raise ValueError("'plan' 是方案树的保留编号，备选树不得使用")
+        return value
+
+
+class VerificationOrderRequest(StrictModel):
+    """凭现行方案号与 1~3 棵编号各异的备选树开 open 核验单。"""
+
+    candidates: list[CandidateTreeModel] = Field(min_length=1, max_length=3)
+
+    @field_validator("candidates")
+    @classmethod
+    def _unique_ids(
+        cls, value: list[CandidateTreeModel]
+    ) -> list[CandidateTreeModel]:
+        seen: set[str] = set()
+        for item in value:
+            key = str(item.id)
+            if key in seen:
+                raise ValueError(f"备选树编号重复: {item.id!r}")
+            seen.add(key)
+        return value
+
+
+class SampleResultModel(StrictModel):
+    sample_index: StrictInt = Field(gt=0)
+    verdict: str
+
+    @field_validator("verdict")
+    @classmethod
+    def _known_verdict(cls, value: str) -> str:
+        if value not in ("pass", "rework"):
+            raise ValueError("样片结果只能是 'pass' 或 'rework'")
+        return value
+
+
+class VerificationSubmitRequest(StrictModel):
+    """凭核验单号回抄每片样片的合格/返工结果。"""
+
+    results: list[SampleResultModel] = Field(min_length=1)
